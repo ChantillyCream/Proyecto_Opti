@@ -2,9 +2,7 @@ import gurobipy as gp
 from gurobipy import GRB
 import pandas as pd
 
-# ==============================================================================
-# CONFIGURACIÓN DE RUTAS RELATIVAS (Ejecutándose desde "Script Python/")
-# ==============================================================================
+#Rutas relativas
 RUTA_INSTANCIA = "../Instancias_Excel/instancia.xlsx"
 RUTA_SALIDA = "../Análisis_de_Excels/resultados_optimos.xlsx"
 
@@ -13,21 +11,19 @@ def main():
     print("Iniciando carga de datos desde Instancias Excel/...")
     xls = pd.ExcelFile(RUTA_INSTANCIA)
 
-    # ==========================================================================
-    # 1. CARGA DE CONJUNTOS
-    # ==========================================================================
+    #Carga de conjuntos
     df_s = pd.read_excel(xls, "SET_S")
     S = df_s["s"].astype(str).tolist()
 
     df_t = pd.read_excel(xls, "SET_T")
     T = df_t["t"].astype(str).tolist()
 
-    # Capas granulares: 1 = subbase granular, 2 = base granular
+    #Capas granulares: 1 = subbase granular, 2 = base granular
     C = [1, 2]
 
     df_m = pd.read_excel(xls, "SET_M")
     M = df_m["m"].astype(str).tolist()
-    # R: Subconjunto de áridos reciclados (ARH)
+    #R: Subconjunto de áridos reciclados (ARH)
     R = df_m[df_m["es_reciclado"] == 1]["m"].astype(str).tolist()
 
     df_f = pd.read_excel(xls, "SET_F")
@@ -35,10 +31,9 @@ def main():
     u_inf = dict(zip(df_f["f"].astype(str), df_f["u_inf"]))
     u_sup = dict(zip(df_f["f"].astype(str), df_f["u_sup"]))
 
-    # ==========================================================================
-    # 2. CARGA DE PARÁMETROS
-    # ==========================================================================
-    # Propiedades individuales de los materiales
+    #Carga de parámetros
+
+    #Propiedades individuales de los materiales
     b_m = dict(zip(df_m["m"].astype(str), df_m["b_m"]))
     k_m = dict(zip(df_m["m"].astype(str), df_m["k_m"]))
     rho_m = dict(zip(df_m["m"].astype(str), df_m["rho_m"]))
@@ -50,14 +45,14 @@ def main():
         for _, r in df_gamma.iterrows()
     }
 
-    # Escalares de diseño y presupuesto
+    #Escalares de diseño y presupuesto
     df_esc = pd.read_excel(xls, "IN_escalares").set_index("parametro")
     h_min = float(df_esc.loc["h_min", "valor"])
     e_min = float(df_esc.loc["e_min", "valor"])
     e_max = float(df_esc.loc["e_max", "valor"])
     p_presupuesto = float(df_esc.loc["p", "valor"])
 
-    # Parámetros del trazado y tramos
+    #Parámetros del trazado y tramos
     df_tramos = pd.read_excel(xls, "IN_tramos").set_index("s")
     ell_s = df_tramos["l_s"].to_dict()
     w_s = df_tramos["w_s"].to_dict()
@@ -65,7 +60,7 @@ def main():
     eps_s = df_tramos["eps_s"].to_dict()
     ac_s = df_tramos["ac_s"].to_dict()
 
-    # Parámetros por capa y tramo (Diseño y Normativa)
+    #Parámetros por capa y tramo (Diseño y Normativa)
     df_capas = pd.read_excel(xls, "IN_capas_tramo")
     a_sc, d_sc, q_sc = {}, {}, {}
     kappa_norma_sc, b_nat_sc = {}, {}
@@ -77,14 +72,14 @@ def main():
         kappa_norma_sc[k] = float(r["kappa_norma"])
         b_nat_sc[k] = float(r["b_nat"])
 
-    # Pre-cálculo de kappa_sc unificado (Manual de Carreteras + Instructivo MOP ORD. 6925)
+    #Pre-cálculo de kappa_sc unificado (Manual de Carreteras + Instructivo MOP ORD. 6925)
     kappa_sc = {
         (s, c): max(kappa_norma_sc[s, c], b_nat_sc[s, c])
         for s in S
         for c in C
     }
 
-    # Reemplazo máximo y admisibilidad no aditiva
+    #Reemplazo máximo y admisibilidad no aditiva
     df_reemp = pd.read_excel(xls, "IN_reemplazo")
     r_msc = {
         (str(r["m"]), str(r["s"]), int(r["c"])): float(r["r_msc"])
@@ -97,7 +92,7 @@ def main():
         for _, r in df_adm.iterrows()
     }
 
-    # Bandas granulométricas admisibles y calce
+    #Bandas granulométricas admisibles y calce
     df_bandas = pd.read_excel(xls, "IN_bandas")
     B_sc = {}
     lambda_mb = {}
@@ -109,7 +104,7 @@ def main():
             B_sc[(s_val, c_val)].append(b_val)
         lambda_mb[(str(r["m"]), b_val)] = int(r["lambda_mb"])
 
-    # Logística y suministro temporal
+    #Logística y suministro temporal
     df_log = pd.read_excel(xls, "IN_logistica_t")
     tau_st = {
         (str(r["s"]), str(r["t"])): float(r["tau_st"])
@@ -122,23 +117,22 @@ def main():
         for _, r in df_sum.iterrows()
     }
 
-    # Inventario inicial en cancha de acopio (0 por defecto)
+    #Inventario inicial en cancha de acopio (0 por defecto)
     im_0_s = {(m, s): 0.0 for m in M for s in S}
 
-    # Cota superior Big-M para precedencia
+    #Cota superior Big-M para precedencia
     Omega_s = {s: sum(tau_st[s, t] for t in T) for s in S}
 
-    # ==========================================================================
-    # 3. CONSTRUCCIÓN DEL MODELO GUROBI
-    # ==========================================================================
-    print(">>> Construyendo modelo matemático...")
+    #Construcción del modelo en gurobi
+
+    print("Construyendo modelo matemático...")
     model = gp.Model("Optimizacion_Capas_Granulares_RCD")
 
-    # TimeLimit de 30 minutos (1800 s) exigido por pauta
+    #TimeLimit de 30 minutos (1800 s)
     model.setParam("TimeLimit", 1800)
     model.setParam("DualReductions", 0)
 
-    # Variables de decisión
+    #Variables de decisión
     h = model.addVars(S, C, vtype=GRB.CONTINUOUS, lb=0.0, name="h")
     x = model.addVars(M, S, C, T, vtype=GRB.CONTINUOUS, lb=0.0, name="x")
     y = model.addVars(M, T, S, vtype=GRB.CONTINUOUS, lb=0.0, name="y")
@@ -151,14 +145,14 @@ def main():
     ]
     z = model.addVars(bandas_validas, vtype=GRB.BINARY, name="z")
 
-    # Función Objetivo (1): Maximizar volumen de árido reciclado colocado
+    #Función Objetivo (1): Maximizar volumen de árido reciclado colocado
     model.setObjective(
         gp.quicksum(x[m, s, c, t] for m in R for s in S for c in C for t in T),
         GRB.MAXIMIZE,
     )
 
-    # Restricciones
-    # (2) y (3) Aporte estructural AASHTO
+    #Restricciones
+    #(2) y (3) Aporte estructural AASHTO
     for s in S:
         aporte = gp.quicksum(a_sc[s, c] * d_sc[s, c] * h[s, c] for c in C)
         model.addConstr(aporte >= g_s[s], name=f"R02_AporteMin_{s}")
@@ -166,7 +160,7 @@ def main():
             aporte <= (1.0 + eps_s[s]) * g_s[s], name=f"R03_AporteMax_{s}"
         )
 
-    # (4) y (5) Espesores admisibles y capas constructivas
+    #(4) y (5) Espesores admisibles y capas constructivas
     for s in S:
         for c in C:
             model.addConstr(h[s, c] >= h_min, name=f"R04_EspesorMin_{s}_{c}")
@@ -177,7 +171,7 @@ def main():
                 h[s, c] <= e_max * n_capas[s, c], name=f"R05b_CapaMax_{s}_{c}"
             )
 
-    # (6) Balance geométrico de volumen
+    #(6) Balance geométrico de volumen
     for s in S:
         for c in C:
             vol_colocado = gp.quicksum(x[m, s, c, t] for m in M for t in T)
@@ -186,7 +180,7 @@ def main():
                 vol_colocado == vol_req, name=f"R06_BalanceVol_{s}_{c}"
             )
 
-    # (7) Capacidad de soporte CBR de la mezcla por período
+    #(7) Capacidad de soporte CBR de la mezcla por período
     for s in S:
         for c in C:
             for t in T:
@@ -196,7 +190,7 @@ def main():
                     lhs >= rhs, name=f"R07_CBR_Mezcla_{s}_{c}_{t}"
                 )
 
-    # (8) y (9) Balance e inventario en cancha de acopio
+    #(8) y (9) Balance e inventario en cancha de acopio
     for m in M:
         for s in S:
             t1 = T[0]
@@ -217,7 +211,7 @@ def main():
                     name=f"R09_Inv_{m}_{s}_{t_act}",
                 )
 
-    # (10) Restricción ajustada según documento 8: Acopio considerando inventario inicial + despacho periodo siguiente
+    #(10) Acopio considerando inventario inicial + despacho periodo siguiente
     # \sum_{m \in M} (i_{mts} + y_{m, t+1, s}) <= ac_s  \forall s \in S, \forall t = 1, ..., T-1
     for s in S:
         for idx in range(len(T) - 1):
@@ -228,7 +222,7 @@ def main():
                 name=f"R10_Cancha_{s}_{t_act}",
             )
 
-    # (11) Oferta mensual disponible en plantas de reciclaje
+    #(11) Oferta mensual disponible en plantas de reciclaje
     for m in R:
         for t in T:
             model.addConstr(
@@ -236,7 +230,7 @@ def main():
                 name=f"R11_OfertaRCD_{m}_{t}",
             )
 
-    # (12) Tasa máxima de colocación y compactación en pista
+    #(12) Tasa máxima de colocación y compactación en pista
     for s in S:
         for t in T:
             model.addConstr(
@@ -245,7 +239,7 @@ def main():
                 name=f"R12_Pista_{s}_{t}",
             )
 
-    # (13) y (14) Precedencia constructiva (Base c=2 tras finalizar Subbase c=1)
+    #(13) y (14) Precedencia constructiva (Base c=2 tras finalizar Subbase c=1)
     for s in S:
         for idx, t in enumerate(T):
             t_anteriores = T[:idx]
@@ -264,7 +258,7 @@ def main():
                 name=f"R14_BloqueoBase_{s}_{t}",
             )
 
-    # (15) y (16) Clasificación granulométrica y admisibilidad
+    #(15) y (16) Clasificación granulométrica y admisibilidad
     for s in S:
         for c in C:
             model.addConstr(
@@ -283,7 +277,7 @@ def main():
                         name=f"R16_Adm_{m}_{s}_{c}_{t}",
                     )
 
-    # (17) Límite máximo de reemplazo por árido reciclado
+    #(17) Límite máximo de reemplazo por árido reciclado
     for m in R:
         for s in S:
             for c in C:
@@ -295,7 +289,7 @@ def main():
                     lhs <= rhs, name=f"R17_MaxReemplazo_{m}_{s}_{c}"
                 )
 
-    # (18) Fracción mínima de material chancado
+    #(18) Fracción mínima de material chancado
     for s in S:
         for c in C:
             lhs = gp.quicksum(
@@ -306,7 +300,7 @@ def main():
             )
             model.addConstr(lhs >= rhs, name=f"R18_Chancado_{s}_{c}")
 
-    # (19) y (20) Fracciones normativas de pureza del material reciclado
+    #(19) y (20) Fracciones normativas de pureza del material reciclado
     for f in F:
         for s in S:
             for c in C:
@@ -325,15 +319,14 @@ def main():
                     m_frac >= u_inf[f] * m_tot, name=f"R20_PurezaInf_{f}_{s}_{c}"
                 )
 
-    # (21) Presupuesto disponible para capas granulares
+    #(21) Presupuesto disponible para capas granulares
     costo_total = gp.quicksum(
         pi_m[m] * x[m, s, c, t] for m in M for s in S for c in C for t in T
     )
     model.addConstr(costo_total <= p_presupuesto, name="R21_Presupuesto")
 
-    # ==========================================================================
-    # 4. RESOLUCIÓN
-    # ==========================================================================
+    #Resolución
+
     print("Resolviendo modelo con Gurobi...")
     model.optimize()
 
