@@ -2,13 +2,13 @@ import gurobipy as gp
 from gurobipy import GRB
 import pandas as pd
 
-#Rutas relativas
+#Rutas relativas (Ejecutándose desde "Script Python/")
 RUTA_INSTANCIA = "../Instancias_Excel/instancia.xlsx"
 RUTA_SALIDA = "../Análisis_de_Excels/resultados_optimos.xlsx"
 
 
 def main():
-    print("Iniciando carga de datos desde Instancias Excel/...")
+    print("Iniciando carga de datos desde Instancias_Excel/...")
     xls = pd.ExcelFile(RUTA_INSTANCIA)
 
     #Carga de conjuntos
@@ -33,7 +33,6 @@ def main():
 
     #Carga de parámetros
 
-    #Propiedades individuales de los materiales
     b_m = dict(zip(df_m["m"].astype(str), df_m["b_m"]))
     k_m = dict(zip(df_m["m"].astype(str), df_m["k_m"]))
     rho_m = dict(zip(df_m["m"].astype(str), df_m["rho_m"]))
@@ -72,7 +71,7 @@ def main():
         kappa_norma_sc[k] = float(r["kappa_norma"])
         b_nat_sc[k] = float(r["b_nat"])
 
-    #Pre-cálculo de kappa_sc unificado (Manual de Carreteras + Instructivo MOP ORD. 6925)
+    #cálculo de kappa_sc (Manual de Carreteras + Instructivo MOP)
     kappa_sc = {
         (s, c): max(kappa_norma_sc[s, c], b_nat_sc[s, c])
         for s in S
@@ -120,17 +119,14 @@ def main():
     #Inventario inicial en cancha de acopio (0 por defecto)
     im_0_s = {(m, s): 0.0 for m in M for s in S}
 
-    #Cota superior Big-M para precedencia
+    #Cota superior Big-M
     Omega_s = {s: sum(tau_st[s, t] for t in T) for s in S}
 
-    #Construcción del modelo en gurobi
-
-    print("Construyendo modelo matemático...")
+    print("> Construyendo modelo matemático...")
     model = gp.Model("Optimizacion_Capas_Granulares_RCD")
 
-    #TimeLimit de 30 minutos (1800 s)
+    #TimeLimit de 30 minutos
     model.setParam("TimeLimit", 1800)
-    model.setParam("DualReductions", 0)
 
     #Variables de decisión
     h = model.addVars(S, C, vtype=GRB.CONTINUOUS, lb=0.0, name="h")
@@ -145,7 +141,7 @@ def main():
     ]
     z = model.addVars(bandas_validas, vtype=GRB.BINARY, name="z")
 
-    #Función Objetivo (1): Maximizar volumen de árido reciclado colocado
+    #Función Objetivo
     model.setObjective(
         gp.quicksum(x[m, s, c, t] for m in R for s in S for c in C for t in T),
         GRB.MAXIMIZE,
@@ -211,12 +207,17 @@ def main():
                     name=f"R09_Inv_{m}_{s}_{t_act}",
                 )
 
-    #(10) Acopio considerando inventario inicial + despacho periodo siguiente
-    # \sum_{m \in M} (i_{mts} + y_{m, t+1, s}) <= ac_s  \forall s \in S, \forall t = 1, ..., T-1
+    #(10) Capacidad de almacenamiento de cancha de acopio
     for s in S:
+        t1 = T[0]
+        #(11): Para t=1, inventario inicial + recepción inicial <= cancha
+        model.addConstr(
+            gp.quicksum(im_0_s[m, s] + y[m, t1, s] for m in M) <= ac_s[s],
+            name=f"R10_Cancha_Inicial_{s}_{t1}",
+        )
+        #Restricción (10)
         for idx in range(len(T) - 1):
-            t_act = T[idx]
-            t_sig = T[idx + 1]
+            t_act, t_sig = T[idx], T[idx + 1]
             model.addConstr(
                 gp.quicksum(inv[m, t_act, s] + y[m, t_sig, s] for m in M) <= ac_s[s],
                 name=f"R10_Cancha_{s}_{t_act}",
@@ -325,14 +326,11 @@ def main():
     )
     model.addConstr(costo_total <= p_presupuesto, name="R21_Presupuesto")
 
-    #Resolución
-
-    print("Resolviendo modelo con Gurobi...")
+    print("> Resolviendo modelo con Gurobi...")
     model.optimize()
 
-    #Exportación a Excel
     if model.SolCount > 0:
-        print(f"\nSolución obtenida. Exportando a '{RUTA_SALIDA}'...")
+        print(f"\n> Solución obtenida. Exportando a '{RUTA_SALIDA}'...")
 
         res_espesores = []
         for s in S:
@@ -381,24 +379,9 @@ def main():
                 writer, sheet_name="Plan_Colocacion_x", index=False
             )
 
-        print(">>> Archivo de resultados generado exitosamente.")
-    elif model.status == GRB.INFEASIBLE:
-        print("\n>>> El modelo es INFACTIBLE. Calculando IIS (restricciones en conflicto)...")
-        model.computeIIS()
-        print("\n" + "="*60)
-        print("RESTRICCIONES EXACTAS QUE PROVOCAN EL CONFLICTO:")
-        print("="*60)
-        for c in model.getConstrs():
-            if c.IISConstr:
-                print(f"  ❌ Restricción: {c.ConstrName}")
-        for v in model.getVars():
-            if v.IISLB:
-                print(f"  ❌ Cota inferior: {v.VarName}")
-            if v.IISUB:
-                print(f"  ❌ Cota superior: {v.VarName}")
-        print("="*60)
-        model.write("infeasible.ilp")
-        print("Se guardó el archivo de conflicto 'infeasible.ilp' para inspección.")
+        print("> Archivo de resultados generado exitosamente.")
+    else:
+        print(f"> No se encontró solución factible. Estado: {model.status}")
 
 
 if __name__ == "__main__":
