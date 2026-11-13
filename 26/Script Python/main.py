@@ -331,34 +331,6 @@ def main():
 
     if model.SolCount > 0:
         print(f"\n> Solución obtenida. Exportando a '{RUTA_SALIDA}'...")
-        print("\n> Verificando restricciones de desigualdad activas (Cuellos de botella reales):")
-        cuellos_botella = {}
-        
-        for constr in model.getConstrs():
-            # 1. Ignorar restricciones de igualdad (==), ya que por definición siempre tienen Slack = 0
-            if constr.Sense == GRB.EQUAL:
-                continue
-                
-            # 2. Verificar si está activa (holgura cercana a 0)
-            if abs(constr.Slack) < 1e-5:
-                # 3. Evaluar si es un cero trivial (ej. 0 >= 0 cuando no hubo movimiento en ese periodo)
-                actividad_lhs = model.getRow(constr).getValue()
-                
-                # Si tanto el lado izquierdo como el derecho son 0, es una restricción inactiva en la práctica
-                if abs(actividad_lhs) < 1e-5 and abs(constr.RHS) < 1e-5:
-                    continue
-                    
-                nombre_restriccion = constr.ConstrName
-                partes = nombre_restriccion.split("_")
-                nombre_base = f"{partes[0]}_{partes[1]}" if len(partes) > 1 else nombre_restriccion
-                
-                # Contar cuántas veces ocurre este cuello de botella real
-                cuellos_botella[nombre_base] = cuellos_botella.get(nombre_base, 0) + 1
-                
-        for tipo, cantidad in sorted(cuellos_botella.items()):
-            print(f" - '{tipo}' está actuando como límite real en {cantidad} instancia(s).")
-            
-        print("-" * 50)
 
         res_espesores = []
         for s in S:
